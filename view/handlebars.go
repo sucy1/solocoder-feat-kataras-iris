@@ -24,7 +24,9 @@ type HandlebarsEngine struct {
 	// Not used anymore.
 	// assetFn   func(name string) ([]byte, error) // for embedded, in combination with directory & extension
 	// namesFn   func() []string                   // for embedded, in combination with directory & extension
-	reload bool // if true, each time the ExecuteWriter is called the templates will be reloaded.
+	reload   bool // if true, each time the ExecuteWriter is called the templates will be reloaded.
+	maxCache int
+	lru      *context.LRUCache
 	// parser configuration
 	layout        string
 	rmu           sync.RWMutex
@@ -49,6 +51,7 @@ func Handlebars(fs any, extension string) *HandlebarsEngine {
 		fs:            getFS(fs),
 		rootDir:       "/",
 		extension:     extension,
+		maxCache:      100,
 		templateCache: make(map[string]*raymond.Template),
 		funcs:         make(template.FuncMap), // global
 	}
@@ -101,7 +104,32 @@ func (s *HandlebarsEngine) Ext() string {
 // It's good to be used side by side with the https://github.com/kataras/rizla reloader for go source files.
 func (s *HandlebarsEngine) Reload(developmentMode bool) *HandlebarsEngine {
 	s.reload = developmentMode
+	if !developmentMode && s.maxCache > 0 && s.lru == nil {
+		s.lru = context.NewLRUCache(s.maxCache)
+	}
 	return s
+}
+
+func (s *HandlebarsEngine) GetReload() bool {
+	return s.reload
+}
+
+func (s *HandlebarsEngine) SetReload(reload bool) {
+	s.reload = reload
+	if !reload && s.maxCache > 0 && s.lru == nil {
+		s.lru = context.NewLRUCache(s.maxCache)
+	}
+}
+
+func (s *HandlebarsEngine) GetMaxCache() int {
+	return s.maxCache
+}
+
+func (s *HandlebarsEngine) SetMaxCache(max int) {
+	s.maxCache = max
+	if !s.reload && max > 0 && s.lru == nil {
+		s.lru = context.NewLRUCache(max)
+	}
 }
 
 // Layout sets the layout template file which should use
@@ -136,6 +164,10 @@ func (s *HandlebarsEngine) AddGlobalFunc(funcName string, funcBody any) {
 //
 // Returns an error if something bad happens, user is responsible to catch it.
 func (s *HandlebarsEngine) Load() error {
+	if !s.reload && s.maxCache > 0 {
+		s.lru = context.NewLRUCache(s.maxCache)
+	}
+
 	// If only custom templates should be loaded.
 	if (s.fs == nil || context.IsNoOpFS(s.fs)) && len(s.templateCache) > 0 {
 		return nil
@@ -196,7 +228,16 @@ func (s *HandlebarsEngine) fromCache(relativeName string) *raymond.Template {
 		defer s.rmu.RUnlock()
 	}
 
+	if s.lru != nil {
+		if v, ok := s.lru.Get(relativeName); ok {
+			return v.(*raymond.Template)
+		}
+	}
+
 	if tmpl, ok := s.templateCache[relativeName]; ok {
+		if s.lru != nil {
+			s.lru.Set(relativeName, tmpl)
+		}
 		return tmpl
 	}
 

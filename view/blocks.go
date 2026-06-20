@@ -4,6 +4,8 @@ import (
 	"html/template"
 	"io"
 
+	"github.com/kataras/iris/v12/context"
+
 	"github.com/kataras/blocks"
 )
 
@@ -21,7 +23,10 @@ import (
 //
 // Read more at: https://github.com/kataras/blocks.
 type BlocksEngine struct {
-	Engine *blocks.Blocks
+	Engine   *blocks.Blocks
+	maxCache int
+	lru      *context.LRUCache
+	reload   bool
 }
 
 var (
@@ -32,7 +37,7 @@ var (
 // WrapBlocks wraps an initialized blocks engine and returns its Iris adapter.
 // See `Blocks` package-level function too.
 func WrapBlocks(v *blocks.Blocks) *BlocksEngine {
-	return &BlocksEngine{Engine: v}
+	return &BlocksEngine{Engine: v, maxCache: 100}
 }
 
 // Blocks returns a new blocks view engine.
@@ -105,12 +110,42 @@ func (s *BlocksEngine) Layout(layoutName string) *BlocksEngine {
 // each `ExecuteWriter` call will re-parse the templates.
 // Useful when the application is at a development stage.
 func (s *BlocksEngine) Reload(b bool) *BlocksEngine {
+	s.reload = b
 	s.Engine.Reload(b)
+	if !b && s.maxCache > 0 && s.lru == nil {
+		s.lru = context.NewLRUCache(s.maxCache)
+	}
 	return s
+}
+
+func (s *BlocksEngine) GetReload() bool {
+	return s.reload
+}
+
+func (s *BlocksEngine) SetReload(reload bool) {
+	s.reload = reload
+	s.Engine.Reload(reload)
+	if !reload && s.maxCache > 0 && s.lru == nil {
+		s.lru = context.NewLRUCache(s.maxCache)
+	}
+}
+
+func (s *BlocksEngine) GetMaxCache() int {
+	return s.maxCache
+}
+
+func (s *BlocksEngine) SetMaxCache(max int) {
+	s.maxCache = max
+	if !s.reload && max > 0 && s.lru == nil {
+		s.lru = context.NewLRUCache(max)
+	}
 }
 
 // Load parses the files into templates.
 func (s *BlocksEngine) Load() error {
+	if !s.reload && s.maxCache > 0 {
+		s.lru = context.NewLRUCache(s.maxCache)
+	}
 	return s.Engine.Load()
 }
 
@@ -118,6 +153,14 @@ func (s *BlocksEngine) Load() error {
 func (s *BlocksEngine) ExecuteWriter(w io.Writer, tmplName, layoutName string, data any) error {
 	if layoutName == NoLayout {
 		layoutName = ""
+	}
+
+	if s.lru != nil {
+		cacheKey := tmplName + "|" + layoutName
+		if v, ok := s.lru.Get(cacheKey); ok {
+			tmpl := v.(*template.Template)
+			return tmpl.Execute(w, data)
+		}
 	}
 
 	return s.Engine.ExecuteTemplate(w, tmplName, layoutName, data)

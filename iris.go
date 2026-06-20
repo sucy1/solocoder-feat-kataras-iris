@@ -112,6 +112,8 @@ type Application struct {
 	hostConfigurators []host.Configurator
 	runError          error
 	runErrorMu        sync.RWMutex
+
+	beforeServeHooks []func() error
 }
 
 // New creates and returns a fresh empty iris *Application instance.
@@ -270,6 +272,11 @@ func (app *Application) Configure(configurators ...Configurator) *Application {
 		}
 	}
 
+	return app
+}
+
+func (app *Application) BeforeServe(fn func() error) *Application {
+	app.beforeServeHooks = append(app.beforeServeHooks, fn)
 	return app
 }
 
@@ -1062,6 +1069,11 @@ func (app *Application) Run(serve Runner, withOrWithout ...Configurator) error {
 
 	app.tryStartTunneling()
 
+	if err := app.runBeforeServeHooks(); err != nil {
+		app.logger.Error(err)
+		return err
+	}
+
 	if len(app.Hosts) > 0 {
 		app.logger.Debugf("Application: running using %d host(s)", len(app.Hosts)+1 /* +1 the current */)
 	}
@@ -1080,6 +1092,29 @@ func (app *Application) Run(serve Runner, withOrWithout ...Configurator) error {
 	// this will block until an error(unless supervisor's DeferFlow called from a Task)
 	// or NonBlocking was passed (see above).
 	return app.serve(serve)
+}
+
+func (app *Application) runBeforeServeHooks() (err error) {
+	for _, fn := range app.beforeServeHooks {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					if e, ok := r.(error); ok {
+						err = e
+					} else {
+						err = fmt.Errorf("before serve hook panic: %v", r)
+					}
+				}
+			}()
+			if e := fn(); e != nil {
+				err = e
+			}
+		}()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (app *Application) serve(serve Runner) error {

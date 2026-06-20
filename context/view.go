@@ -34,6 +34,16 @@ type ViewEngine interface {
 	// which this view engine is responsible to render.
 	// If the filename extension on ExecuteWriter is empty then this is appended.
 	Ext() string
+	// Reload returns whether the engine reloads templates on each render.
+	// When false, compiled templates are cached in memory with LRU strategy.
+	// When true, templates are recompiled on each ExecuteWriter call.
+	GetReload() bool
+	// SetReload sets the reload mode.
+	SetReload(reload bool)
+	// GetMaxCache returns the maximum number of templates to keep in the LRU cache.
+	GetMaxCache() int
+	// SetMaxCache sets the maximum number of templates to keep in the LRU cache.
+	SetMaxCache(max int)
 }
 
 // ViewEngineFuncer is an addition of a view engine,

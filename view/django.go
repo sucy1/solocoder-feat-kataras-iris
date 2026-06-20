@@ -96,6 +96,8 @@ type DjangoEngine struct {
 	rootDir   string
 	extension string
 	reload    bool
+	maxCache  int
+	lru       *context.LRUCache
 	//
 	rmu sync.RWMutex // locks for filters, globals and `ExecuteWiter` when `reload` is true.
 	// filters for pongo2, map[name of the filter] the filter function . The filters are auto register
@@ -123,6 +125,7 @@ func Django(fs any, extension string) *DjangoEngine {
 		fs:            getFS(fs),
 		rootDir:       "/",
 		extension:     extension,
+		maxCache:      100,
 		globals:       make(map[string]any),
 		filters:       make(map[string]FilterFunction),
 		templateCache: make(map[string]*pongo2.Template),
@@ -167,7 +170,32 @@ func (s *DjangoEngine) Ext() string {
 // It's good to be used side by side with the https://github.com/kataras/rizla reloader for go source files.
 func (s *DjangoEngine) Reload(developmentMode bool) *DjangoEngine {
 	s.reload = developmentMode
+	if !developmentMode && s.maxCache > 0 && s.lru == nil {
+		s.lru = context.NewLRUCache(s.maxCache)
+	}
 	return s
+}
+
+func (s *DjangoEngine) GetReload() bool {
+	return s.reload
+}
+
+func (s *DjangoEngine) SetReload(reload bool) {
+	s.reload = reload
+	if !reload && s.maxCache > 0 && s.lru == nil {
+		s.lru = context.NewLRUCache(s.maxCache)
+	}
+}
+
+func (s *DjangoEngine) GetMaxCache() int {
+	return s.maxCache
+}
+
+func (s *DjangoEngine) SetMaxCache(max int) {
+	s.maxCache = max
+	if !s.reload && max > 0 && s.lru == nil {
+		s.lru = context.NewLRUCache(max)
+	}
 }
 
 // AddFunc adds the function to the template's Globals.
@@ -222,6 +250,10 @@ func (s *DjangoEngine) RegisterTag(tagName string, fn TagParser) error {
 //
 // Returns an error if something bad happens, user is responsible to catch it.
 func (s *DjangoEngine) Load() error {
+	if !s.reload && s.maxCache > 0 {
+		s.lru = context.NewLRUCache(s.maxCache)
+	}
+
 	// If only custom templates should be loaded.
 	if (s.fs == nil || context.IsNoOpFS(s.fs)) && len(s.templateCache) > 0 {
 		return nil
@@ -309,7 +341,16 @@ func (s *DjangoEngine) fromCache(relativeName string) *pongo2.Template {
 		defer s.rmu.RUnlock()
 	}
 
+	if s.lru != nil {
+		if v, ok := s.lru.Get(relativeName); ok {
+			return v.(*pongo2.Template)
+		}
+	}
+
 	if tmpl, ok := s.templateCache[relativeName]; ok {
+		if s.lru != nil {
+			s.lru.Set(relativeName, tmpl)
+		}
 		return tmpl
 	}
 	return nil

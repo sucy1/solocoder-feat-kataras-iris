@@ -6,7 +6,9 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kataras/iris/v12/cache"
@@ -16,6 +18,8 @@ import (
 	"github.com/kataras/iris/v12/core/router"
 	"github.com/kataras/iris/v12/hero"
 	"github.com/kataras/iris/v12/view"
+
+	"golang.org/x/time/rate"
 )
 
 var (
@@ -879,3 +883,147 @@ type Singleton struct{}
 
 // Singleton returns true as this controller is a singleton.
 func (c Singleton) Singleton() bool { return true }
+
+type (
+	ErrorResponse = context.ErrorResponse
+
+	CORSOptions struct {
+		AllowedOrigins   []string
+		AllowedMethods   []string
+		AllowedHeaders   []string
+		AllowCredentials bool
+		MaxAge           time.Duration
+	}
+)
+
+func NewError(code int, message string, details any) *ErrorResponse {
+	return context.NewError(code, message, details)
+}
+
+func BeforeServe(fn func() error) Configurator {
+	return func(app *Application) {
+		app.BeforeServe(fn)
+	}
+}
+
+type ipRateLimiter struct {
+	limit   rate.Limit
+	burst   int
+	clients map[string]*rate.Limiter
+	mu      sync.RWMutex
+}
+
+func LimitRate(limit float64, burst int) Handler {
+	if limit <= 0 {
+		return func(ctx Context) {
+			ctx.Next()
+		}
+	}
+	if burst < 1 {
+		burst = 1
+	}
+
+	l := &ipRateLimiter{
+		limit:   rate.Limit(limit),
+		burst:   burst,
+		clients: make(map[string]*rate.Limiter),
+	}
+
+	return func(ctx Context) {
+		ip := ctx.RemoteAddr()
+
+		l.mu.RLock()
+		limiter, ok := l.clients[ip]
+		l.mu.RUnlock()
+
+		if !ok {
+			l.mu.Lock()
+			if limiter, ok = l.clients[ip]; !ok {
+				limiter = rate.NewLimiter(l.limit, l.burst)
+				l.clients[ip] = limiter
+			}
+			l.mu.Unlock()
+		}
+
+		if limiter.Allow() {
+			ctx.Next()
+			return
+		}
+
+		ctx.StopWithStatus(http.StatusTooManyRequests)
+	}
+}
+
+func CORS(options CORSOptions) Handler {
+	allowOrigins := "*"
+	if len(options.AllowedOrigins) > 0 {
+		allowOrigins = strings.Join(options.AllowedOrigins, ", ")
+	}
+
+	allowMethods := "*"
+	if len(options.AllowedMethods) > 0 {
+		allowMethods = strings.Join(options.AllowedMethods, ", ")
+	}
+
+	allowHeaders := "*"
+	if len(options.AllowedHeaders) > 0 {
+		allowHeaders = strings.Join(options.AllowedHeaders, ", ")
+	}
+
+	allowCredentials := "false"
+	if options.AllowCredentials {
+		allowCredentials = "true"
+	}
+
+	maxAge := ""
+	if options.MaxAge > 0 {
+		maxAge = strconv.FormatInt(int64(options.MaxAge.Seconds()), 10)
+	}
+
+	originsAllowed := make(map[string]struct{})
+	for _, o := range options.AllowedOrigins {
+		originsAllowed[o] = struct{}{}
+	}
+	allowAllOrigins := len(options.AllowedOrigins) == 0 || allowOrigins == "*"
+
+	return func(ctx Context) {
+		ctx.Header("Vary", "Origin")
+
+		origin := ctx.GetHeader("Origin")
+
+		if !allowAllOrigins {
+			if origin == "" {
+				ctx.Next()
+				return
+			}
+			if _, ok := originsAllowed[origin]; !ok {
+				ctx.Next()
+				return
+			}
+		}
+
+		if origin != "" {
+			ctx.Header("Access-Control-Allow-Origin", origin)
+		} else if allowAllOrigins {
+			ctx.Header("Access-Control-Allow-Origin", "*")
+		}
+
+		if options.AllowCredentials {
+			ctx.Header("Access-Control-Allow-Credentials", allowCredentials)
+		}
+
+		if ctx.Method() == http.MethodOptions {
+			ctx.Header("Vary", "Access-Control-Request-Method")
+			ctx.Header("Vary", "Access-Control-Request-Headers")
+			ctx.Header("Access-Control-Allow-Methods", allowMethods)
+			ctx.Header("Access-Control-Allow-Headers", allowHeaders)
+			if maxAge != "" {
+				ctx.Header("Access-Control-Max-Age", maxAge)
+			}
+			ctx.StatusCode(http.StatusNoContent)
+			return
+		}
+
+		ctx.Next()
+	}
+}

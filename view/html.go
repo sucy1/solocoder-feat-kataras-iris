@@ -25,6 +25,11 @@ type HTMLEngine struct {
 	// if true, each time the ExecuteWriter is called the templates will be reloaded,
 	// each ExecuteWriter waits to be finished before writing to a new one.
 	reload bool
+	// maxCache is the maximum number of compiled templates to keep in LRU cache.
+	// Defaults to 100. Only used when reload is false.
+	maxCache int
+	// lru caches compiled templates when reload is false and maxCache > 0.
+	lru *context.LRUCache
 	// parser configuration
 	options     []string // (text) template options
 	left        string
@@ -72,6 +77,7 @@ func HTML(dirOrFS any, extension string) *HTMLEngine {
 		rootDir:   "/",
 		extension: extension,
 		reload:    false,
+		maxCache:  100,
 		left:      "{{",
 		right:     "}}",
 		layout:    "",
@@ -131,6 +137,32 @@ func (s *HTMLEngine) Ext() string {
 func (s *HTMLEngine) Reload(developmentMode bool) *HTMLEngine {
 	s.reload = developmentMode
 	return s
+}
+
+// GetReload returns whether the engine reloads templates on each render.
+func (s *HTMLEngine) GetReload() bool {
+	return s.reload
+}
+
+// SetReload sets the reload mode.
+func (s *HTMLEngine) SetReload(reload bool) {
+	s.reload = reload
+	if !reload && s.maxCache > 0 && s.lru == nil {
+		s.lru = context.NewLRUCache(s.maxCache)
+	}
+}
+
+// GetMaxCache returns the maximum number of templates to keep in the LRU cache.
+func (s *HTMLEngine) GetMaxCache() int {
+	return s.maxCache
+}
+
+// SetMaxCache sets the maximum number of templates to keep in the LRU cache.
+func (s *HTMLEngine) SetMaxCache(max int) {
+	s.maxCache = max
+	if !s.reload && max > 0 {
+		s.lru = context.NewLRUCache(max)
+	}
 }
 
 // Option sets options for the template. Options are described by
@@ -239,6 +271,10 @@ func (s *HTMLEngine) Funcs(funcMap template.FuncMap) *HTMLEngine {
 func (s *HTMLEngine) Load() error {
 	s.rmu.Lock()
 	defer s.rmu.Unlock()
+
+	if !s.reload && s.maxCache > 0 {
+		s.lru = context.NewLRUCache(s.maxCache)
+	}
 
 	return s.load()
 }
@@ -453,7 +489,22 @@ func (s *HTMLEngine) ExecuteWriter(w io.Writer, name string, layout string, bind
 	}
 
 	if layout = getLayout(layout, s.layout); layout != "" {
-		lt := s.Templates.Lookup(layout)
+		var lt *template.Template
+		cacheKey := "layout:" + layout
+
+		if s.lru != nil {
+			if v, ok := s.lru.Get(cacheKey); ok {
+				lt = v.(*template.Template)
+			} else {
+				lt = s.Templates.Lookup(layout)
+				if lt != nil {
+					s.lru.Set(cacheKey, lt)
+				}
+			}
+		} else {
+			lt = s.Templates.Lookup(layout)
+		}
+
 		if lt == nil {
 			return ErrNotExist{Name: layout, IsLayout: true, Data: bindingData}
 		}
@@ -461,7 +512,22 @@ func (s *HTMLEngine) ExecuteWriter(w io.Writer, name string, layout string, bind
 		return lt.Funcs(s.getBuiltinRuntimeLayoutFuncs(name)).Execute(w, bindingData)
 	}
 
-	t := s.Templates.Lookup(name)
+	var t *template.Template
+	cacheKey := "tpl:" + name
+
+	if s.lru != nil {
+		if v, ok := s.lru.Get(cacheKey); ok {
+			t = v.(*template.Template)
+		} else {
+			t = s.Templates.Lookup(name)
+			if t != nil {
+				s.lru.Set(cacheKey, t)
+			}
+		}
+	} else {
+		t = s.Templates.Lookup(name)
+	}
+
 	if t == nil {
 		return ErrNotExist{Name: name, IsLayout: false, Data: bindingData}
 	}

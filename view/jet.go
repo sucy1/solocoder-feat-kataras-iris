@@ -27,6 +27,8 @@ type JetEngine struct {
 	loader jet.Loader
 
 	developmentMode bool
+	maxCache        int
+	lru             *context.LRUCache
 
 	// The Set is the `*jet.Set`, exported to offer any custom capabilities that jet users may want.
 	// Available after `Load`.
@@ -77,6 +79,7 @@ func Jet(dirOrFS any, extension string) *JetEngine {
 		fs:                getFS(dirOrFS),
 		rootDir:           "/",
 		extension:         extension,
+		maxCache:          100,
 		loader:            &jetLoader{fs: getFS(dirOrFS)},
 		jetDataContextKey: "_jet",
 	}
@@ -197,7 +200,32 @@ func (s *JetEngine) AddVar(key string, value any) {
 // not safe concurrent access across clients, use it only on development state.
 func (s *JetEngine) Reload(developmentMode bool) *JetEngine {
 	s.developmentMode = developmentMode
+	if !developmentMode && s.maxCache > 0 && s.lru == nil {
+		s.lru = context.NewLRUCache(s.maxCache)
+	}
 	return s
+}
+
+func (s *JetEngine) GetReload() bool {
+	return s.developmentMode
+}
+
+func (s *JetEngine) SetReload(reload bool) {
+	s.developmentMode = reload
+	if !reload && s.maxCache > 0 && s.lru == nil {
+		s.lru = context.NewLRUCache(s.maxCache)
+	}
+}
+
+func (s *JetEngine) GetMaxCache() int {
+	return s.maxCache
+}
+
+func (s *JetEngine) SetMaxCache(max int) {
+	s.maxCache = max
+	if !s.developmentMode && max > 0 && s.lru == nil {
+		s.lru = context.NewLRUCache(max)
+	}
 }
 
 // SetLoader can be used when the caller wants to use something like
@@ -228,6 +256,10 @@ func (l *jetLoader) Exists(name string) bool {
 
 // Load should load the templates from a physical system directory or by an embedded one (assets/go-bindata).
 func (s *JetEngine) Load() error {
+	if !s.developmentMode && s.maxCache > 0 {
+		s.lru = context.NewLRUCache(s.maxCache)
+	}
+
 	rootDirName := getRootDirName(s.fs)
 
 	return walk(s.fs, "", func(path string, info os.FileInfo, err error) error {
@@ -335,7 +367,22 @@ func (s *JetEngine) AddRuntimeVars(ctx *context.Context, vars JetRuntimeVars) {
 
 // ExecuteWriter should execute a template by its filename with an optional layout and bindingData.
 func (s *JetEngine) ExecuteWriter(w io.Writer, filename string, layout string, bindingData any) error {
-	tmpl, err := s.Set.GetTemplate(filename)
+	var tmpl *jet.Template
+	var err error
+
+	if s.lru != nil {
+		if v, ok := s.lru.Get(filename); ok {
+			tmpl = v.(*jet.Template)
+		} else {
+			tmpl, err = s.Set.GetTemplate(filename)
+			if err == nil && tmpl != nil {
+				s.lru.Set(filename, tmpl)
+			}
+		}
+	} else {
+		tmpl, err = s.Set.GetTemplate(filename)
+	}
+
 	if err != nil {
 		return err
 	}
