@@ -22,7 +22,7 @@ import (
 	"github.com/kataras/iris/v12/core/router"
 	"github.com/kataras/iris/v12/i18n"
 	"github.com/kataras/iris/v12/middleware/cors"
-	"github.com/kataras/iris/v12/middleware/recover"
+	corerecover "github.com/kataras/iris/v12/middleware/recover"
 	"github.com/kataras/iris/v12/middleware/requestid"
 	"github.com/kataras/iris/v12/view"
 
@@ -175,7 +175,7 @@ func Default() *Application {
 
 	// Register the recovery, after accesslog and recover,
 	// before end-developer's middleware.
-	app.UseRouter(recover.New())
+	app.UseRouter(corerecover.New())
 
 	// Register CORS (allow any origin to pass through) middleware.
 	app.UseRouter(cors.New().
@@ -1094,25 +1094,30 @@ func (app *Application) Run(serve Runner, withOrWithout ...Configurator) error {
 	return app.serve(serve)
 }
 
-func (app *Application) runBeforeServeHooks() (err error) {
-	for _, fn := range app.beforeServeHooks {
-		func() {
+func (app *Application) runBeforeServeHooks() error {
+	var errs []error
+
+	for i, fn := range app.beforeServeHooks {
+		func(hookIndex int) {
 			defer func() {
 				if r := recover(); r != nil {
-					if e, ok := r.(error); ok {
-						err = e
+					var e error
+					if err, ok := r.(error); ok {
+						e = err
 					} else {
-						err = fmt.Errorf("before serve hook panic: %v", r)
+						e = fmt.Errorf("before serve hook [%d] panic: %v", hookIndex, r)
 					}
+					errs = append(errs, e)
 				}
 			}()
-			if e := fn(); e != nil {
-				err = e
+			if err := fn(); err != nil {
+				errs = append(errs, fmt.Errorf("before serve hook [%d]: %w", i, err))
 			}
-		}()
-		if err != nil {
-			return err
-		}
+		}(i)
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	return nil
 }

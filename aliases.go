@@ -19,6 +19,8 @@ import (
 	"github.com/kataras/iris/v12/hero"
 	"github.com/kataras/iris/v12/view"
 
+	"github.com/kataras/golog"
+
 	"golang.org/x/time/rate"
 )
 
@@ -955,9 +957,22 @@ func LimitRate(limit float64, burst int) Handler {
 }
 
 func CORS(options CORSOptions) Handler {
-	allowOrigins := "*"
-	if len(options.AllowedOrigins) > 0 {
-		allowOrigins = strings.Join(options.AllowedOrigins, ", ")
+	allowAllOrigins := len(options.AllowedOrigins) == 0
+	hasWildcard := false
+	hasSpecificOrigin := false
+
+	for _, o := range options.AllowedOrigins {
+		if o == "*" {
+			hasWildcard = true
+		} else {
+			hasSpecificOrigin = true
+		}
+	}
+
+	if hasWildcard && hasSpecificOrigin {
+		golog.Default.Warnf("iris.CORS: AllowedOrigins contains both wildcard '*' and specific origins. "+
+			"Wildcard takes precedence and specific origins will be ignored.")
+		allowAllOrigins = true
 	}
 
 	allowMethods := "*"
@@ -980,26 +995,73 @@ func CORS(options CORSOptions) Handler {
 		maxAge = strconv.FormatInt(int64(options.MaxAge.Seconds()), 10)
 	}
 
-	originsAllowed := make(map[string]struct{})
-	for _, o := range options.AllowedOrigins {
-		originsAllowed[o] = struct{}{}
+	type originMatcher struct {
+		prefix  string
+		suffix  string
+		exact   string
+		isMatch bool
 	}
-	allowAllOrigins := len(options.AllowedOrigins) == 0 || allowOrigins == "*"
+
+	var matchers []originMatcher
+	originsAllowed := make(map[string]struct{})
+
+	for _, o := range options.AllowedOrigins {
+		if o == "*" {
+			continue
+		}
+
+		if strings.HasPrefix(o, "*.") {
+			suffix := o[1:]
+			matchers = append(matchers, originMatcher{suffix: suffix, isMatch: false})
+		} else if strings.HasSuffix(o, ".*") {
+			prefix := o[:len(o)-2]
+			matchers = append(matchers, originMatcher{prefix: prefix, isMatch: false})
+		} else if strings.Contains(o, "*") {
+			parts := strings.SplitN(o, "*", 2)
+			matchers = append(matchers, originMatcher{prefix: parts[0], suffix: parts[1], isMatch: false})
+		} else {
+			originsAllowed[o] = struct{}{}
+			matchers = append(matchers, originMatcher{exact: o, isMatch: true})
+		}
+	}
+
+	matchOrigin := func(origin string) bool {
+		if allowAllOrigins {
+			return true
+		}
+		if _, ok := originsAllowed[origin]; ok {
+			return true
+		}
+		for _, m := range matchers {
+			switch {
+			case m.isMatch && m.exact == origin:
+				return true
+			case m.prefix != "" && m.suffix != "":
+				if strings.HasPrefix(origin, m.prefix) && strings.HasSuffix(origin, m.suffix) &&
+					len(origin) >= len(m.prefix)+len(m.suffix) {
+					return true
+				}
+			case m.prefix != "":
+				if strings.HasPrefix(origin, m.prefix) {
+					return true
+				}
+			case m.suffix != "":
+				if strings.HasSuffix(origin, m.suffix) {
+					return true
+				}
+			}
+		}
+		return false
+	}
 
 	return func(ctx Context) {
 		ctx.Header("Vary", "Origin")
 
 		origin := ctx.GetHeader("Origin")
 
-		if !allowAllOrigins {
-			if origin == "" {
-				ctx.Next()
-				return
-			}
-			if _, ok := originsAllowed[origin]; !ok {
-				ctx.Next()
-				return
-			}
+		if origin != "" && !matchOrigin(origin) {
+			ctx.Next()
+			return
 		}
 
 		if origin != "" {

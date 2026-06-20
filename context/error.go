@@ -18,6 +18,6 @@ func (e *ErrorResponse) Error() string {
 	return e.Message
 }
 
-func (ctx *Context) StopWithError(err *ErrorResponse) {
+func (ctx *Context) StopWithErrorResponse(err *ErrorResponse) {
 	ctx.StopWithJSON(err.Code, err)
 }

@@ -127,6 +127,8 @@ func (s *BlocksEngine) SetReload(reload bool) {
 	s.Engine.Reload(reload)
 	if !reload && s.maxCache > 0 && s.lru == nil {
 		s.lru = context.NewLRUCache(s.maxCache)
+	} else if reload {
+		s.lru = nil
 	}
 }
 
@@ -136,7 +138,11 @@ func (s *BlocksEngine) GetMaxCache() int {
 
 func (s *BlocksEngine) SetMaxCache(max int) {
 	s.maxCache = max
-	if !s.reload && max > 0 && s.lru == nil {
+	if max <= 0 {
+		s.lru = nil
+		return
+	}
+	if !s.reload && s.lru == nil {
 		s.lru = context.NewLRUCache(max)
 	}
 }

@@ -149,6 +149,8 @@ func (s *HTMLEngine) SetReload(reload bool) {
 	s.reload = reload
 	if !reload && s.maxCache > 0 && s.lru == nil {
 		s.lru = context.NewLRUCache(s.maxCache)
+	} else if reload {
+		s.lru = nil
 	}
 }
 
@@ -160,7 +162,11 @@ func (s *HTMLEngine) GetMaxCache() int {
 // SetMaxCache sets the maximum number of templates to keep in the LRU cache.
 func (s *HTMLEngine) SetMaxCache(max int) {
 	s.maxCache = max
-	if !s.reload && max > 0 {
+	if max <= 0 {
+		s.lru = nil
+		return
+	}
+	if !s.reload && s.lru == nil {
 		s.lru = context.NewLRUCache(max)
 	}
 }

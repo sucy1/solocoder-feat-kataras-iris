@@ -214,6 +214,8 @@ func (s *JetEngine) SetReload(reload bool) {
 	s.developmentMode = reload
 	if !reload && s.maxCache > 0 && s.lru == nil {
 		s.lru = context.NewLRUCache(s.maxCache)
+	} else if reload {
+		s.lru = nil
 	}
 }
 
@@ -223,7 +225,11 @@ func (s *JetEngine) GetMaxCache() int {
 
 func (s *JetEngine) SetMaxCache(max int) {
 	s.maxCache = max
-	if !s.developmentMode && max > 0 && s.lru == nil {
+	if max <= 0 {
+		s.lru = nil
+		return
+	}
+	if !s.developmentMode && s.lru == nil {
 		s.lru = context.NewLRUCache(max)
 	}
 }

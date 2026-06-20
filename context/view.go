@@ -41,8 +41,10 @@ type ViewEngine interface {
 	// SetReload sets the reload mode.
 	SetReload(reload bool)
 	// GetMaxCache returns the maximum number of templates to keep in the LRU cache.
+	// If MaxCache <= 0, LRU caching is disabled even when Reload is false.
 	GetMaxCache() int
 	// SetMaxCache sets the maximum number of templates to keep in the LRU cache.
+	// If max <= 0, LRU caching is disabled and any existing cache is cleared.
 	SetMaxCache(max int)
 }
 
