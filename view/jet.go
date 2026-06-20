@@ -234,6 +234,10 @@ func (s *JetEngine) SetMaxCache(max int) {
 	}
 }
 
+func (s *JetEngine) DisableCache() {
+	s.SetMaxCache(0)
+}
+
 // SetLoader can be used when the caller wants to use something like
 // multi.Loader or httpfs.Loader.
 func (s *JetEngine) SetLoader(loader jet.Loader) *JetEngine {
@@ -264,6 +268,8 @@ func (l *jetLoader) Exists(name string) bool {
 func (s *JetEngine) Load() error {
 	if !s.developmentMode && s.maxCache > 0 {
 		s.lru = context.NewLRUCache(s.maxCache)
+	} else {
+		s.lru = nil
 	}
 
 	rootDirName := getRootDirName(s.fs)

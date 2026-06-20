@@ -171,6 +171,11 @@ func (s *HTMLEngine) SetMaxCache(max int) {
 	}
 }
 
+// DisableCache disables the LRU cache by setting max cache to 0.
+func (s *HTMLEngine) DisableCache() {
+	s.SetMaxCache(0)
+}
+
 // Option sets options for the template. Options are described by
 // strings, either a simple string or "key=value". There can be at
 // most one equals sign in an option string. If the option string
@@ -280,6 +285,8 @@ func (s *HTMLEngine) Load() error {
 
 	if !s.reload && s.maxCache > 0 {
 		s.lru = context.NewLRUCache(s.maxCache)
+	} else {
+		s.lru = nil
 	}
 
 	return s.load()

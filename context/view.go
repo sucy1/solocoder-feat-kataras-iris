@@ -46,6 +46,9 @@ type ViewEngine interface {
 	// SetMaxCache sets the maximum number of templates to keep in the LRU cache.
 	// If max <= 0, LRU caching is disabled and any existing cache is cleared.
 	SetMaxCache(max int)
+	// DisableCache disables LRU caching entirely. Equivalent to SetMaxCache(0).
+	// This is useful when Reload is false but template result caching is still undesired.
+	DisableCache()
 }
 
 // ViewEngineFuncer is an addition of a view engine,

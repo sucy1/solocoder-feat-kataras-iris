@@ -138,6 +138,10 @@ func (s *HandlebarsEngine) SetMaxCache(max int) {
 	}
 }
 
+func (s *HandlebarsEngine) DisableCache() {
+	s.SetMaxCache(0)
+}
+
 // Layout sets the layout template file which should use
 // the {{ yield . }} func to yield the main template file
 // and optionally {{partial/partial_r/render . }} to render
@@ -172,6 +176,8 @@ func (s *HandlebarsEngine) AddGlobalFunc(funcName string, funcBody any) {
 func (s *HandlebarsEngine) Load() error {
 	if !s.reload && s.maxCache > 0 {
 		s.lru = context.NewLRUCache(s.maxCache)
+	} else {
+		s.lru = nil
 	}
 
 	// If only custom templates should be loaded.

@@ -1,6 +1,7 @@
 package iris
 
 import (
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -958,21 +959,97 @@ func LimitRate(limit float64, burst int) Handler {
 
 func CORS(options CORSOptions) Handler {
 	allowAllOrigins := len(options.AllowedOrigins) == 0
-	hasWildcard := false
 	hasSpecificOrigin := false
+	hasGenericWildcard := false
 
-	for _, o := range options.AllowedOrigins {
-		if o == "*" {
-			hasWildcard = true
-		} else {
-			hasSpecificOrigin = true
-		}
+	type originEntry struct {
+		raw          string
+		isWildcard   bool
+		hasSubdomain bool // *.example.com style
+		prefix       string
+		suffix       string
+		exact        string
 	}
 
-	if hasWildcard && hasSpecificOrigin {
+	var entries []originEntry
+
+	for _, o := range options.AllowedOrigins {
+		e := originEntry{raw: o}
+		if o == "*" {
+			hasGenericWildcard = true
+			e.isWildcard = true
+		} else {
+			hasSpecificOrigin = true
+			if strings.HasPrefix(o, "*.") {
+				e.isWildcard = true
+				e.hasSubdomain = true
+				e.suffix = o[1:]
+			} else if strings.HasSuffix(o, ".*") {
+				e.isWildcard = true
+				e.prefix = o[:len(o)-2]
+			} else if strings.Contains(o, "*") {
+				e.isWildcard = true
+				parts := strings.SplitN(o, "*", 2)
+				e.prefix = parts[0]
+				e.suffix = parts[1]
+			} else {
+				e.exact = o
+			}
+		}
+		entries = append(entries, e)
+	}
+
+	if hasGenericWildcard && hasSpecificOrigin {
 		golog.Default.Warnf("iris.CORS: AllowedOrigins contains both wildcard '*' and specific origins. "+
 			"Wildcard takes precedence and specific origins will be ignored.")
 		allowAllOrigins = true
+	}
+
+	if !allowAllOrigins && !hasGenericWildcard {
+		var wildcardEntries []originEntry
+		var exactEntries []originEntry
+		for _, e := range entries {
+			if e.isWildcard {
+				wildcardEntries = append(wildcardEntries, e)
+			} else {
+				exactEntries = append(exactEntries, e)
+			}
+		}
+
+		if len(wildcardEntries) > 0 && len(exactEntries) > 0 {
+			var overlaps []string
+			for _, we := range wildcardEntries {
+				for _, ee := range exactEntries {
+					matched := false
+					switch {
+					case we.hasSubdomain:
+						if strings.HasSuffix(ee.exact, we.suffix) && len(ee.exact) > len(we.suffix) {
+							matched = true
+						}
+					case we.prefix != "" && we.suffix != "":
+						if strings.HasPrefix(ee.exact, we.prefix) && strings.HasSuffix(ee.exact, we.suffix) &&
+							len(ee.exact) >= len(we.prefix)+len(we.suffix) {
+							matched = true
+						}
+					case we.prefix != "":
+						if strings.HasPrefix(ee.exact, we.prefix) {
+							matched = true
+						}
+					case we.suffix != "":
+						if strings.HasSuffix(ee.exact, we.suffix) {
+							matched = true
+						}
+					}
+					if matched {
+						overlaps = append(overlaps, fmt.Sprintf("'%s' is already matched by wildcard '%s'", ee.raw, we.raw))
+					}
+				}
+			}
+			if len(overlaps) > 0 {
+				golog.Default.Warnf("iris.CORS: AllowedOrigins contains overlapping wildcard and specific origins: %s. "+
+					"Consider removing redundant specific origins.", strings.Join(overlaps, ", "))
+			}
+		}
 	}
 
 	allowMethods := "*"
@@ -1005,23 +1082,20 @@ func CORS(options CORSOptions) Handler {
 	var matchers []originMatcher
 	originsAllowed := make(map[string]struct{})
 
-	for _, o := range options.AllowedOrigins {
-		if o == "*" {
+	for _, e := range entries {
+		if e.isWildcard && e.raw == "*" {
 			continue
 		}
 
-		if strings.HasPrefix(o, "*.") {
-			suffix := o[1:]
-			matchers = append(matchers, originMatcher{suffix: suffix, isMatch: false})
-		} else if strings.HasSuffix(o, ".*") {
-			prefix := o[:len(o)-2]
-			matchers = append(matchers, originMatcher{prefix: prefix, isMatch: false})
-		} else if strings.Contains(o, "*") {
-			parts := strings.SplitN(o, "*", 2)
-			matchers = append(matchers, originMatcher{prefix: parts[0], suffix: parts[1], isMatch: false})
+		if e.isWildcard {
+			matchers = append(matchers, originMatcher{
+				prefix:  e.prefix,
+				suffix:  e.suffix,
+				isMatch: false,
+			})
 		} else {
-			originsAllowed[o] = struct{}{}
-			matchers = append(matchers, originMatcher{exact: o, isMatch: true})
+			originsAllowed[e.exact] = struct{}{}
+			matchers = append(matchers, originMatcher{exact: e.exact, isMatch: true})
 		}
 	}
 

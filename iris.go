@@ -1094,30 +1094,84 @@ func (app *Application) Run(serve Runner, withOrWithout ...Configurator) error {
 	return app.serve(serve)
 }
 
+type BeforeServeError struct {
+	Index   int
+	IsPanic bool
+	Err     error
+}
+
+func (e *BeforeServeError) Error() string {
+	if e.IsPanic {
+		return fmt.Sprintf("before serve hook [%d] panic: %v", e.Index, e.Err)
+	}
+	return fmt.Sprintf("before serve hook [%d]: %v", e.Index, e.Err)
+}
+
+func (e *BeforeServeError) Unwrap() error {
+	return e.Err
+}
+
+type BeforeServeErrors []*BeforeServeError
+
+func (es BeforeServeErrors) Error() string {
+	if len(es) == 0 {
+		return ""
+	}
+	if len(es) == 1 {
+		return es[0].Error()
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%d before serve hook errors: [", len(es)))
+	for i, e := range es {
+		if i > 0 {
+			sb.WriteString("; ")
+		}
+		sb.WriteString(e.Error())
+	}
+	sb.WriteString("]")
+	return sb.String()
+}
+
+func (es BeforeServeErrors) Unwrap() []error {
+	errs := make([]error, len(es))
+	for i, e := range es {
+		errs[i] = e
+	}
+	return errs
+}
+
 func (app *Application) runBeforeServeHooks() error {
-	var errs []error
+	var errs BeforeServeErrors
 
 	for i, fn := range app.beforeServeHooks {
 		func(hookIndex int) {
 			defer func() {
 				if r := recover(); r != nil {
-					var e error
-					if err, ok := r.(error); ok {
-						e = err
+					var err error
+					if e, ok := r.(error); ok {
+						err = e
 					} else {
-						e = fmt.Errorf("before serve hook [%d] panic: %v", hookIndex, r)
+						err = fmt.Errorf("%v", r)
 					}
-					errs = append(errs, e)
+					errs = append(errs, &BeforeServeError{
+						Index:   hookIndex,
+						IsPanic: true,
+						Err:     err,
+					})
 				}
 			}()
 			if err := fn(); err != nil {
-				errs = append(errs, fmt.Errorf("before serve hook [%d]: %w", i, err))
+				errs = append(errs, &BeforeServeError{
+					Index:   hookIndex,
+					IsPanic: false,
+					Err:     err,
+				})
 			}
 		}(i)
 	}
 
 	if len(errs) > 0 {
-		return errors.Join(errs...)
+		return errs
 	}
 	return nil
 }

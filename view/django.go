@@ -204,6 +204,10 @@ func (s *DjangoEngine) SetMaxCache(max int) {
 	}
 }
 
+func (s *DjangoEngine) DisableCache() {
+	s.SetMaxCache(0)
+}
+
 // AddFunc adds the function to the template's Globals.
 // It is legal to overwrite elements of the default actions:
 // - url func(routeName string, args ...string) string
@@ -258,6 +262,8 @@ func (s *DjangoEngine) RegisterTag(tagName string, fn TagParser) error {
 func (s *DjangoEngine) Load() error {
 	if !s.reload && s.maxCache > 0 {
 		s.lru = context.NewLRUCache(s.maxCache)
+	} else {
+		s.lru = nil
 	}
 
 	// If only custom templates should be loaded.

@@ -147,10 +147,16 @@ func (s *BlocksEngine) SetMaxCache(max int) {
 	}
 }
 
+func (s *BlocksEngine) DisableCache() {
+	s.SetMaxCache(0)
+}
+
 // Load parses the files into templates.
 func (s *BlocksEngine) Load() error {
 	if !s.reload && s.maxCache > 0 {
 		s.lru = context.NewLRUCache(s.maxCache)
+	} else {
+		s.lru = nil
 	}
 	return s.Engine.Load()
 }
