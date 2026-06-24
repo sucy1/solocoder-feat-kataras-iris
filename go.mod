@@ -1,6 +1,6 @@
 module github.com/kataras/iris/v12
 
-go 1.25
+go 1.25.0
 
 retract [v12.0.0, v12.1.8] // Retract older versions as only latest is to be depended upon. Please update to @latest
 
@@ -39,11 +39,11 @@ require (
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	github.com/yosssi/ace v0.0.5
 	go.etcd.io/bbolt v1.4.3
-	golang.org/x/crypto v0.47.0
+	golang.org/x/crypto v0.53.0
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96
-	golang.org/x/net v0.49.0
-	golang.org/x/sys v0.40.0
-	golang.org/x/text v0.33.0
+	golang.org/x/net v0.55.0
+	golang.org/x/sys v0.46.0
+	golang.org/x/text v0.38.0
 	golang.org/x/time v0.14.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/ini.v1 v1.67.1
