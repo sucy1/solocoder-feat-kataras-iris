@@ -11,7 +11,7 @@ require (
 	github.com/Shopify/goreferrer v0.0.0-20250617153402-88c1d9a79b05
 	github.com/andybalholm/brotli v1.2.0
 	github.com/blang/semver/v4 v4.0.0
-	github.com/dgraph-io/badger/v4 v4.9.0
+	github.com/dgraph-io/badger/v4 v4.9.2
 	github.com/fatih/structs v1.1.0
 	github.com/flosch/pongo2/v4 v4.0.2
 	github.com/golang/snappy v1.0.0
